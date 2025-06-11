@@ -14,7 +14,7 @@ app = Flask(__name__)
 # If you are testing locally, you might temporarily set this to 'http://localhost:port_number'
 # (e.g., 'http://localhost:5500' if using Live Server in VS Code) or '*' for development.
 # NEVER use '*' in production.
-FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "https://macaulaywebsblog.netlify.app/login.html") # <-- UPDATE THIS!
+FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "https://macaulaywebsblog.netlify.app") # <-- UPDATE THIS!
 CORS(app, origins=FRONTEND_ORIGIN, methods=["GET", "POST", "PUT", "DELETE"], headers=["Content-Type", "Authorization"])
 
 # JWT Secret Key - STORE THIS SECURELY AS AN ENVIRONMENT VARIABLE ON RENDER!
