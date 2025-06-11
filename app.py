@@ -10,11 +10,11 @@ from functools import wraps # For creating decorators
 app = Flask(__name__)
 
 # --- Configuration ---
-# IMPORTANT: Replace 'https://your-frontend-domain.netlify.app' with your actual Netlify frontend URL.
+# IMPORTANT: Replace 'https://macaulaywebsblog.netlify.app' with your actual Netlify frontend URL.
 # If you are testing locally, you might temporarily set this to 'http://localhost:port_number'
 # (e.g., 'http://localhost:5500' if using Live Server in VS Code) or '*' for development.
 # NEVER use '*' in production.
-FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "https://macaulaywebsblog.netlify.app") # <-- UPDATE THIS!
+FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "https://macaulaywebsblog.netlify.app") # <--- CORRECTED BASE URL!
 CORS(app, origins=FRONTEND_ORIGIN, methods=["GET", "POST", "PUT", "DELETE"], headers=["Content-Type", "Authorization"])
 
 # JWT Secret Key - STORE THIS SECURELY AS AN ENVIRONMENT VARIABLE ON RENDER!
@@ -157,7 +157,7 @@ def create_post():
     return jsonify({"message": "Post created successfully", "post": new_post}), 201
 
 @app.route('/api/posts', methods=['GET'])
-@auth_required # Only authenticated users can view posts
+# Removed @auth_required: Public home page can now fetch posts without authentication.
 def get_posts():
     """
     Returns all stored blog posts.
