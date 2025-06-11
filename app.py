@@ -5,7 +5,7 @@ app = Flask(__name__)
 
 # Dummy user (you can later store this in a JSON file or DB)
 users = {
-    "admin@example.com": {
+    "macaulaydavid88@gmail.com": {
         "password": "password123",
         "id": "user-001"
     }
