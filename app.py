@@ -1,35 +1,41 @@
 import os
 from flask import Flask, request, jsonify
-from flask_cors import CORS # For handling Cross-Origin Resource Sharing
-from datetime import datetime, timedelta, timezone # For JWT expiry
-import jwt # For JSON Web Tokens
-import requests # For making HTTP requests to the Gemini API
-import hashlib # For basic password hashing (use stronger methods in production!)
-from functools import wraps # For creating decorators
+from flask_cors import CORS
+from datetime import datetime, timedelta, timezone
+import jwt
+import requests
+import hashlib
+from functools import wraps
+from supabase import create_client, Client # <--- ADDED: Supabase imports
 
 app = Flask(__name__)
 
 # --- Configuration ---
-# IMPORTANT: Replace 'https://macaulaywebsblog.netlify.app' with your actual Netlify frontend URL.
-# If you are testing locally, you might temporarily set this to 'http://localhost:port_number'
-# (e.g., 'http://localhost:5500' if using Live Server in VS Code) or '*' for development.
-# NEVER use '*' in production.
-FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "https://macaulaywebsblog.netlify.app") # <--- CORRECTED BASE URL!
+FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "https://macaulaywebsblog.netlify.app")
 CORS(app, origins=FRONTEND_ORIGIN, methods=["GET", "POST", "PUT", "DELETE"], headers=["Content-Type", "Authorization"])
 
-# JWT Secret Key - STORE THIS SECURELY AS AN ENVIRONMENT VARIABLE ON RENDER!
-# Example: Generate a strong key with `os.urandom(24).hex()` and put it in Render's ENV.
-# If not set, a default is used, but it's INSECURE for production.
 SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "your_super_secret_jwt_key_please_change_this_in_production!")
-
-# Gemini API Key - STORE THIS SECURELY AS AN ENVIRONMENT VARIABLE ON RENDER!
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-# --- In-Memory Data Stores (WARNING: Data LOST on server restart!) ---
-# For a real blog, replace these with a persistent database (e.g., PostgreSQL, MongoDB).
+# Supabase Configuration - STORE THESE SECURELY AS ENVIRONMENT VARIABLES ON RENDER!
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY") # This is your 'anon public' key
+
+# Validate Supabase credentials
+if not SUPABASE_URL or not SUPABASE_KEY:
+    print("WARNING: Supabase URL or Key not set. Supabase features will not work.")
+    # In a real production app, you might want to exit or raise an error here
+    # to prevent the app from running without crucial dependencies.
+    supabase = None # Set to None if not configured, handle gracefully in endpoints
+else:
+    # Initialize Supabase client
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    print("Supabase client initialized.")
+
+
+# --- In-Memory Data Stores (Removed for posts, retained for dummy users) ---
 
 # Hashed password for the dummy user. In production, use `bcrypt` or `scrypt`.
-# Simple SHA256 hash of 'password123'
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
@@ -41,7 +47,7 @@ users = {
     }
 }
 
-posts = [] # Stores blog posts
+# posts = [] # <--- REMOVED: Posts will now be stored in Supabase
 
 # --- JWT Utility Functions ---
 
@@ -131,43 +137,87 @@ def verify_token_endpoint():
 @auth_required # Only authenticated users can create posts
 def create_post():
     """
-    Handles creating a new blog post.
+    Handles creating a new blog post in Supabase.
     Expects JSON: {"title": "...", "content": "...", "imageUrl": "..." (optional)}
-    The author_id is taken from the authenticated user's token.
+    The author_id and author_email are taken from the authenticated user's token.
     """
+    if not supabase:
+        return jsonify({"message": "Supabase client not initialized. Check environment variables."}), 500
+
     data = request.json
     title = data.get("title")
     content = data.get("content")
-    image_url = data.get("imageUrl") # This URL would typically come from an image upload service
+    image_url = data.get("imageUrl")
 
     if not title or not content:
         return jsonify({"message": "Title and content are required"}), 400
 
-    new_post = {
-        "id": f"post-{len(posts) + 1}", # Simple ID generation (replace with UUIDs in production)
-        "title": title,
-        "content": content,
-        "authorId": request.user_id, # Get author from authenticated user
-        "authorEmail": request.user_email, # Get author email from authenticated user
-        "imageUrl": image_url,
-        "createdAt": datetime.now(timezone.utc).isoformat(),
-        "lastModifiedAt": datetime.now(timezone.utc).isoformat()
-    }
-    posts.append(new_post)
-    return jsonify({"message": "Post created successfully", "post": new_post}), 201
+    try:
+        # Insert data into Supabase. Note the snake_case for column names.
+        response = supabase.table('posts').insert({
+            "title": title,
+            "content": content,
+            "author_id": request.user_id,
+            "author_email": request.user_email,
+            "image_url": image_url,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "last_modified_at": datetime.now(timezone.utc).isoformat()
+        }).execute()
+
+        # Supabase returns data in response.data for successful inserts
+        # It's a list, so take the first element if you expect one record
+        new_post_from_db = response.data[0]
+        return jsonify({"message": "Post created successfully", "post": new_post_from_db}), 201
+
+    except Exception as e:
+        print(f"Error creating post in Supabase: {e}")
+        return jsonify({"message": f"Failed to create post: {str(e)}"}), 500
 
 @app.route('/api/posts', methods=['GET'])
-# Removed @auth_required: Public home page can now fetch posts without authentication.
 def get_posts():
     """
-    Returns all stored blog posts.
+    Returns all stored blog posts from Supabase.
     """
-    # Sort posts by creation date, newest first
-    sorted_posts = sorted(posts, key=lambda p: p.get('createdAt', ''), reverse=True)
-    return jsonify(sorted_posts) # Frontend expects a list directly
+    if not supabase:
+        return jsonify({"message": "Supabase client not initialized. Check environment variables."}), 500
+
+    try:
+        # Fetch all posts from Supabase, ordered by created_at descending
+        response = supabase.table('posts').select('*').order('created_at', desc=True).execute()
+
+        # Supabase returns data in response.data
+        posts_from_db = response.data
+        return jsonify(posts_from_db)
+
+    except Exception as e:
+        print(f"Error fetching posts from Supabase: {e}")
+        return jsonify({"message": f"Failed to fetch posts: {str(e)}"}), 500
+
+@app.route('/api/posts/<post_id>', methods=['GET']) # <--- ADDED: New endpoint for single post
+def get_single_post(post_id):
+    """
+    Returns a single blog post by its ID from Supabase.
+    """
+    if not supabase:
+        return jsonify({"message": "Supabase client not initialized. Check environment variables."}), 500
+
+    try:
+        # Fetch a single post from Supabase by its ID
+        response = supabase.table('posts').select('*').eq('id', post_id).limit(1).execute()
+
+        post_data = response.data
+        if not post_data:
+            return jsonify({"message": "Post not found"}), 404
+
+        return jsonify(post_data[0]) # Return the first (and only) matching post
+
+    except Exception as e:
+        print(f"Error fetching single post from Supabase: {e}")
+        return jsonify({"message": f"Failed to fetch post: {str(e)}"}), 500
+
 
 @app.route('/api/upload-image', methods=['POST'])
-@auth_required # Only authenticated users can upload images
+@auth_required
 def upload_image():
     """
     Simulates image upload. In a real application, you would upload the file
@@ -193,7 +243,7 @@ def upload_image():
 # --- Gemini API Proxy Endpoints ---
 
 @app.route('/api/gemini/<string:model_endpoint>', methods=['POST'])
-@auth_required # Only authenticated users can use Gemini features
+@auth_required
 def gemini_proxy(model_endpoint):
     """
     Proxies requests to the Gemini API based on the model_endpoint.
@@ -208,12 +258,6 @@ def gemini_proxy(model_endpoint):
     if not GEMINI_API_KEY:
         return jsonify({"message": "Gemini API key is not configured on the backend. Please set GEMINI_API_KEY environment variable."}), 500
 
-    # Ensure the model_endpoint is valid for Gemini (e.g., generateContent, countTokens)
-    # Using 'gemini-pro' for flexibility, but 'gemini-2.0-flash' as per frontend.
-    # The frontend is sending specific 'model_endpoint' such as 'generate-content', 'summarize-content', 'suggest-titles'.
-    # We need to map these to actual Gemini model methods, which is typically 'generateContent'.
-    # A more sophisticated proxy might map them to different models or prompts.
-    # For now, all will use 'generateContent' with the provided prompt.
     gemini_api_method = "generateContent" # Default method for text generation
 
     gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:{gemini_api_method}?key={GEMINI_API_KEY}"
@@ -226,7 +270,6 @@ def gemini_proxy(model_endpoint):
         response.raise_for_status() # Raise an exception for HTTP errors (4xx or 5xx)
         gemini_result = response.json()
 
-        # Extract generated text from Gemini's response
         generated_text = ""
         if gemini_result.get("candidates") and gemini_result["candidates"][0].get("content") and \
            gemini_result["candidates"][0]["content"].get("parts"):
@@ -235,7 +278,7 @@ def gemini_proxy(model_endpoint):
             print("Gemini API response did not contain expected content:", gemini_result)
             return jsonify({"message": "Gemini API did not return text content.", "details": gemini_result}), 500
 
-        return jsonify({"text": generated_text}) # Return text as expected by frontend
+        return jsonify({"text": generated_text})
 
     except requests.exceptions.HTTPError as e:
         print(f"HTTP Error calling Gemini API: {e.response.status_code} - {e.response.text}")
@@ -255,8 +298,6 @@ def gemini_proxy(model_endpoint):
 
 # --- Server Start ---
 if __name__ == '__main__':
-    # Render automatically provides a PORT environment variable.
-    # We listen on 0.0.0.0 to make sure it's accessible externally.
     port = int(os.environ.get("PORT", 5000))
     print(f"Flask app running on http://0.0.0.0:{port}")
     app.run(host='0.0.0.0', port=port)
